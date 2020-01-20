@@ -5,6 +5,7 @@ import subprocess
 import optparse
 import logging
 import yaml
+import glob
 import time
 import sys
 import os
@@ -358,6 +359,106 @@ fi
                 f.write(shell)
         return job_dic
 
+    def bam_part_split(self):
+        job_dic = {}
+        bam_path = os.path.join(self.path, 'bam_chr')
+        bam_split_path = os.path.join(self.path, 'QC/bam_chr_part_split')
+        bam_split_script_path = os.path.join(bam_split_path, 'script')
+        if not os.path.exists(bam_split_script_path):
+            os.makedirs(bam_split_script_path)
+        sambamba = self.config['software']['sambamba']
+        resource = self.config['resource']['sambamba_view']
+        beds = glob.glob(self.config['database']['genome_bed'])
+        for b in beds:
+            bed = os.path.basename(b)
+            bed_name_split = bed.split('.')
+            if not bed.startswith('chrM'):
+                chrom = str(bed_name_split[0])
+                part = str(bed_name_split[1])
+            else:
+                chrom = str(bed_name_split[0]) + '.' + str(bed_name_split[1])
+                part = str(bed_name_split[2])
+            bam_split_part_path = os.path.join(bam_split_path, chrom + '/' + part)
+            if not os.path.exists(bam_split_part_path):
+                os.makedirs(bam_split_part_path)
+            script = os.path.join(bam_split_script_path, chrom + '.' + part + '.split.sh')
+            script_flag = script + ".check"
+            job_dic[script] = {}
+            job_dic[script]['flow'] = 'split'
+            job_dic[script]['parent'] = [os.path.join(bam_path, 'script/bqsr/' + chrom + '.bqsr.sh')]
+            job_dic[script]['child'] = []
+            job_dic[script]['resource'] = resource
+            job_dic[script]['jobid'] = ''
+            if os.path.exists(script_flag):
+                job_dic[script]['status'] = 'complete'
+            else:
+                job_dic[script]['status'] = 'incomplete'
+            with open(script, 'w') as f:
+                shell = r'''#!/bin/bash
+echo {self.sample} {chrom} {part} bam split start `date`
+{sambamba} view -f bam -h -o {bam_split_part_path}/{chrom}_{part}.bam -L {b} {bam_path}/{chrom}.bqsr.bam
+if [ $? -ne 0 ]; then
+    echo {self.sample} {chrom} {part} bam split failed
+    exit 1
+else
+    {sambamba} index {bam_split_part_path}/{chrom}_{part}.bam
+    echo {self.sample} {chrom} {part} bam split end `date`
+    touch {script}.check
+fi
+'''.format(**locals())
+                f.write(shell)
+        return job_dic
+
+    def qc(self):
+        job_dic = {}
+        bam_split_path = os.path.join(self.path, 'QC/bam_chr_part_split')
+        bam_split_qc_path = os.path.join(self.path, 'QC/QC_BED_SPLIT')
+        bam_split_qc_script_path = os.path.join(bam_split_qc_path, 'script')
+        if not os.path.exists(bam_split_qc_script_path):
+            os.makedirs(bam_split_qc_script_path)
+        bamdst = self.config['software']['bamdst']
+        resource = self.config['resource']['bamdst']
+        beds = glob.glob(self.config['database']['genome_bed'])
+        for b in beds:
+            bed = os.path.basename(b)
+            bed_name_split = bed.split('.')
+            if not bed.startswith('chrM'):
+                chrom = str(bed_name_split[0])
+                part = str(bed_name_split[1])
+            else:
+                chrom = str(bed_name_split[0]) + '.' + str(bed_name_split[1])
+                part = str(bed_name_split[2])
+            bam_split_part_path = os.path.join(bam_split_path, chrom + '/' + part)
+            bam_split_qc_part_path = os.path.join(bam_split_qc_path, chrom + '/' + part)
+            if not os.path.exists(bam_split_qc_part_path):
+                os.makedirs(bam_split_qc_part_path)
+            script = os.path.join(bam_split_qc_script_path, chrom + '.' + part + '.qc.sh')
+            script_flag = script + ".check"
+            job_dic[script] = {}
+            job_dic[script]['flow'] = 'qc'
+            job_dic[script]['parent'] = [os.path.join(bam_split_path, 'script/' + chrom + '.' + part + '.split.sh')]
+            job_dic[script]['child'] = []
+            job_dic[script]['resource'] = resource
+            job_dic[script]['jobid'] = ''
+            if os.path.exists(script_flag):
+                job_dic[script]['status'] = 'complete'
+            else:
+                job_dic[script]['status'] = 'incomplete'
+            with open(script, 'w') as f:
+                shell = r'''#!/bin/bash
+echo {self.sample} {chrom} {part} bam split qc start `date`
+{bamdst} -p {b} -o {bam_split_qc_part_path} {bam_split_part_path}/{chrom}_{part}.bam
+if [ $? -ne 0 ]; then
+    echo {self.sample} {chrom} {part} bam split qc failed
+    exit 1
+else
+    echo {self.sample} {chrom} {part} bam split qc end `date`
+    touch {script}.check
+fi
+'''.format(**locals())
+                f.write(shell)
+        return job_dic
+
 
 def yaml_read(yaml_file):
     with open(yaml_file, 'r') as y:
@@ -499,10 +600,14 @@ if __name__ == '__main__':
     dupmark_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).dupmark()
     fixmate_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).fixmate()
     bqsr_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bqsr()
+    split_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bam_part_split()
+    qc_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).qc()
+
     if onlyshell:
         logger_main.info('WGS Pipeline Create Jobs Finish and Exit!')
         sys.exit(0)
-    nodes = [filter_job_dic, align_job_dic, sort_job_dic, merge_job_dic, dupmark_job_dic, fixmate_job_dic, bqsr_job_dic]
+    nodes = [filter_job_dic, align_job_dic, sort_job_dic, merge_job_dic, dupmark_job_dic,
+             fixmate_job_dic, bqsr_job_dic, split_job_dic, qc_job_dic]
     nodes_dic = reduce(lambda x, y: dict(x, **y), nodes)
     nodes_dic = jobs_map(nodes_dic)
     with open('jobs_map.yaml', 'w') as fp:

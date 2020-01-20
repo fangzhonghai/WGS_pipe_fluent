@@ -14,15 +14,18 @@ software:
  spliceai: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/spliceai
  tabix: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/tabix
  gatk: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/gatk
+ bamdst: /zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/tools/bamdst
 
 resource:
   fastp: -l vf=1G,p=4 -binding linear:4
   bwa: -l vf=6G,p=6 -binding linear:6
   sambamba_sort: -l vf=3G,p=4 -binding linear:4
+  sambamba_view: -l vf=4G,p=1 -binding linear:1
   samtools_merge: -l vf=4G,p=4 -binding linear:4
   dupmark: -l vf=25G,p=1 -binding linear:1
   fixmate: -l vf=15G,p=1 -binding linear:1
   bqsr: -l vf=10G,p=1 -binding linear:1
+  bamdst: -l vf=4G,p=1 -binding linear:1
 
 parameters:
   fastp: --thread 4 -s 15
@@ -40,3 +43,4 @@ parameters:
 
 database:
   hg19: /hwfssz1/ST_MCHRI/CLINIC/SOFTWARES/analysis_pipeline/HPC_chip/db/aln_db/hg19/hg19_chM_male_mask.fa
+  genome_bed: "/zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/config/WGS_BED_SPLIT_6M_delN/chr*.part*.bed"
