@@ -1,33 +1,42 @@
 software:
- fastp: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/fastp
- bwa: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/bwa
- samtools: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/samtools
- sambamba: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/sambamba
- java: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/java
- R: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/R
- Rscript: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/Rscript
- python3: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/python3
- perl: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/perl
- bedtools: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/bedtools
- bcftools: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/bcftools
- vcftools: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/vcftools
- spliceai: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/spliceai
- tabix: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/tabix
- gatk4: /hwfssz6/B2C_RD_P2/USER/fangzhonghai/local/bin/gatk-package-4.1.4.0-local.jar
+ fastp: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/fastp
+ bwa: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/bwa
+ samtools: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/samtools
+ sambamba: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/sambamba
+ java: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/java
+ R: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/R
+ Rscript: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/Rscript
+ python3: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/python3
+ perl: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/perl
+ bedtools: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/bedtools
+ bcftools: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/bcftools
+ vcftools: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/vcftools
+ spliceai: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/spliceai
+ tabix: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/tabix
+ gatk: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/local/gatk
 
 resource:
   fastp: -l vf=1G,p=4 -binding linear:4
   bwa: -l vf=6G,p=6 -binding linear:6
-  sambamba: -l vf=3G,p=4 -binding linear:4
-  samtools: -l vf=4G,p=4 -binding linear:4
-  merge_dup: -l vf=15G,p=4 -binding linear:4
+  sambamba_sort: -l vf=3G,p=4 -binding linear:4
+  samtools_merge: -l vf=4G,p=4 -binding linear:4
+  dupmark: -l vf=25G,p=1 -binding linear:1
+  fixmate: -l vf=15G,p=1 -binding linear:1
+  bqsr: -l vf=10G,p=1 -binding linear:1
 
 parameters:
   fastp: --thread 4 -s 15
   fastp_split_num: 15
   bwa: mem -M -t 6
-  sambamba: sort --memory-limit 23G -l 1 -t 4
-  samtools: merge --threads 4 -c -p -f
+  sambamba_sort: sort --memory-limit 23G -l 1 -t 4
+  samtools_merge: merge --threads 4 -c -p -f
+  dupmark: --VALIDATION_STRINGENCY SILENT --MAX_FILE_HANDLES_FOR_READ_ENDS_MAP 8000
+  fixmate: --VALIDATION_STRINGENCY SILENT
+  bqsr: |
+   --known-sites /zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/tools/bundle/1000G_omni2.5.hg19.sites.vcf.gz \
+   --known-sites /zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/tools/bundle/1000G_phase1.snps.high_confidence.hg19.sites.vcf.gz \
+   --known-sites /zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/tools/bundle/dbsnp_138.hg19.vcf.gz \
+   --known-sites /zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/tools/bundle/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf
 
 database:
   hg19: /hwfssz1/ST_MCHRI/CLINIC/SOFTWARES/analysis_pipeline/HPC_chip/db/aln_db/hg19/hg19_chM_male_mask.fa

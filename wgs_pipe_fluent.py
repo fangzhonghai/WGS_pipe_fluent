@@ -18,6 +18,8 @@ class JobCreate:
         self.sample = sample
         self.gender = gender
         self.fq_info_df = fq_info_df
+        fastp_split = self.config['parameters']['fastp_split_num']
+        self.bam_split = ["{:0>4d}".format(i) for i in range(1, int(fastp_split) + 1)]
 
     def fq_filter(self):
         job_dic = {}
@@ -82,8 +84,6 @@ fi
         resource = self.config['resource']['bwa']
         reference = self.config['database']['hg19']
         samtools = self.config['software']['samtools']
-        fastp_split = self.config['parameters']['fastp_split_num']
-        bam_split = ["{:0>4d}".format(i) for i in range(1, int(fastp_split) + 1)]
         for i in range(self.fq_info_df.shape[0]):
             chip_lane_index = self.fq_info_df.loc[i, 'chip_lane_index']
             align_bam_path = os.path.join(align_path, chip_lane_index)
@@ -91,7 +91,7 @@ fi
                 os.makedirs(align_bam_path)
             fq1_name = self.fq_info_df.loc[i, 'fq1_name']
             fq2_name = self.fq_info_df.loc[i, 'fq2_name']
-            for n in bam_split:
+            for n in self.bam_split:
                 align_bam_split_path = os.path.join(align_bam_path, n)
                 if not os.path.exists(align_bam_split_path):
                     os.makedirs(align_bam_split_path)
@@ -132,15 +132,13 @@ fi
         if not os.path.exists(sort_script_path):
             os.makedirs(sort_script_path)
         sambamba = self.config['software']['sambamba']
-        param = self.config['parameters']['sambamba']
-        resource = self.config['resource']['sambamba']
+        param = self.config['parameters']['sambamba_sort']
+        resource = self.config['resource']['sambamba_sort']
         samtools = self.config['software']['samtools']
-        fastp_split = self.config['parameters']['fastp_split_num']
-        bam_split = ["{:0>4d}".format(i) for i in range(1, int(fastp_split) + 1)]
         for i in range(self.fq_info_df.shape[0]):
             chip_lane_index = self.fq_info_df.loc[i, 'chip_lane_index']
             align_bam_path = os.path.join(align_path, chip_lane_index)
-            for n in bam_split:
+            for n in self.bam_split:
                 align_bam_split_path = os.path.join(align_bam_path, n)
                 script = os.path.join(sort_script_path, 'sort.' + n + "." + chip_lane_index + '.sh')
                 script_flag = script + ".check"
@@ -180,10 +178,8 @@ fi
         if not os.path.exists(merge_script_path):
             os.makedirs(merge_script_path)
         samtools = self.config['software']['samtools']
-        param = self.config['parameters']['samtools']
-        resource = self.config['resource']['samtools']
-        fastp_split = self.config['parameters']['fastp_split_num']
-        bam_split = ["{:0>4d}".format(i) for i in range(1, int(fastp_split) + 1)]
+        param = self.config['parameters']['samtools_merge']
+        resource = self.config['resource']['samtools_merge']
         chroms = ['chr' + str(i) for i in range(1, 23)] + ['chrX', 'chrY', 'chrM_NC_012920.1']
         sort_scripts = []
         sort_bams = os.path.join(merge_script_path, 'all.sort.bam.list')
@@ -191,7 +187,7 @@ fi
             for i in range(self.fq_info_df.shape[0]):
                 chip_lane_index = self.fq_info_df.loc[i, 'chip_lane_index']
                 align_bam_path = os.path.join(align_path, chip_lane_index)
-                for n in bam_split:
+                for n in self.bam_split:
                     sort_scripts.append(os.path.join(sort_script_path, 'sort.' + n + "." + chip_lane_index + '.sh'))
                     align_bam_split_path = os.path.join(align_bam_path, n)
                     shell = '''{align_bam_split_path}/{chip_lane_index}.{n}.align.sort.bam
@@ -219,6 +215,143 @@ if [ $? -ne 0 ]; then
     exit 1
 else
     echo {self.sample} {chrom} bam sort merge end `date`
+    touch {script}.check
+fi
+'''.format(**locals())
+                f.write(shell)
+        return job_dic
+
+    def dupmark(self):
+        job_dic = {}
+        bam_path = os.path.join(self.path, 'bam_chr')
+        merge_script_path = os.path.join(bam_path, 'script/merge')
+        dup_script_path = os.path.join(bam_path, 'script/dupmark')
+        if not os.path.exists(dup_script_path):
+            os.makedirs(dup_script_path)
+        gatk = self.config['software']['gatk']
+        param = self.config['parameters']['dupmark']
+        resource = self.config['resource']['dupmark']
+        chroms = ['chr' + str(i) for i in range(1, 23)] + ['chrX', 'chrY', 'chrM_NC_012920.1']
+        for chrom in chroms:
+            tmp_dir = os.path.join(bam_path, 'script/tmp/' + chrom)
+            if not os.path.exists(tmp_dir):
+                os.makedirs(tmp_dir)
+            script = os.path.join(dup_script_path, chrom + '.dupmark.sh')
+            script_flag = script + ".check"
+            job_dic[script] = {}
+            job_dic[script]['flow'] = 'dupmark'
+            job_dic[script]['parent'] = [os.path.join(merge_script_path, chrom + '.merge.sh')]
+            job_dic[script]['child'] = []
+            job_dic[script]['resource'] = resource
+            job_dic[script]['jobid'] = ''
+            if os.path.exists(script_flag):
+                job_dic[script]['status'] = 'complete'
+            else:
+                job_dic[script]['status'] = 'incomplete'
+            with open(script, 'w') as f:
+                shell = r'''#!/bin/bash
+echo {self.sample} {chrom} bam dupmark start `date`
+{gatk} MarkDuplicates {param} --TMP_DIR {tmp_dir} \
+-I {bam_path}/{chrom}.sort.bam -O {bam_path}/{chrom}.sort.dup.bam -M {bam_path}/{chrom}.sort.dup.bam.metrics
+if [ $? -ne 0 ]; then
+    echo {self.sample} {chrom} bam dupmark failed
+    exit 1
+else
+    echo {self.sample} {chrom} bam dupmark end `date`
+    touch {script}.check
+fi
+'''.format(**locals())
+                f.write(shell)
+        return job_dic
+
+    def fixmate(self):
+        job_dic = {}
+        bam_path = os.path.join(self.path, 'bam_chr')
+        dup_script_path = os.path.join(bam_path, 'script/dupmark')
+        fix_script_path = os.path.join(bam_path, 'script/fixmate')
+        if not os.path.exists(fix_script_path):
+            os.makedirs(fix_script_path)
+        gatk = self.config['software']['gatk']
+        samtools = self.config['software']['samtools']
+        param = self.config['parameters']['fixmate']
+        resource = self.config['resource']['fixmate']
+        chroms = ['chr' + str(i) for i in range(1, 23)] + ['chrX', 'chrY', 'chrM_NC_012920.1']
+        for chrom in chroms:
+            tmp_dir = os.path.join(bam_path, 'script/tmp/' + chrom)
+            script = os.path.join(fix_script_path, chrom + '.fixmate.sh')
+            script_flag = script + ".check"
+            job_dic[script] = {}
+            job_dic[script]['flow'] = 'fixmate'
+            job_dic[script]['parent'] = [os.path.join(dup_script_path, chrom + '.dupmark.sh')]
+            job_dic[script]['child'] = []
+            job_dic[script]['resource'] = resource
+            job_dic[script]['jobid'] = ''
+            if os.path.exists(script_flag):
+                job_dic[script]['status'] = 'complete'
+            else:
+                job_dic[script]['status'] = 'incomplete'
+            with open(script, 'w') as f:
+                shell = r'''#!/bin/bash
+echo {self.sample} {chrom} bam fixmate start `date`
+{gatk} FixMateInformation {param} --TMP_DIR {tmp_dir} \
+-I {bam_path}/{chrom}.sort.dup.bam -O {bam_path}/{chrom}.sort.dup.fix.bam
+if [ $? -ne 0 ]; then
+    echo {self.sample} {chrom} bam fixmate failed
+    exit 1
+else
+    {samtools} index {bam_path}/{chrom}.sort.dup.fix.bam
+    echo {self.sample} {chrom} bam fixmate end `date`
+    touch {script}.check
+fi
+'''.format(**locals())
+                f.write(shell)
+        return job_dic
+
+    def bqsr(self):
+        job_dic = {}
+        bam_path = os.path.join(self.path, 'bam_chr')
+        fix_script_path = os.path.join(bam_path, 'script/fixmate')
+        bqsr_script_path = os.path.join(bam_path, 'script/bqsr')
+        if not os.path.exists(bqsr_script_path):
+            os.makedirs(bqsr_script_path)
+        gatk = self.config['software']['gatk']
+        reference = self.config['database']['hg19']
+        samtools = self.config['software']['samtools']
+        param = self.config['parameters']['bqsr']
+        resource = self.config['resource']['bqsr']
+        chroms = ['chr' + str(i) for i in range(1, 23)] + ['chrX', 'chrY', 'chrM_NC_012920.1']
+        for chrom in chroms:
+            tmp_dir = os.path.join(bam_path, 'script/tmp/' + chrom)
+            script = os.path.join(bqsr_script_path, chrom + '.bqsr.sh')
+            script_flag = script + ".check"
+            job_dic[script] = {}
+            job_dic[script]['flow'] = 'bqsr'
+            job_dic[script]['parent'] = [os.path.join(fix_script_path, chrom + '.fixmate.sh')]
+            job_dic[script]['child'] = []
+            job_dic[script]['resource'] = resource
+            job_dic[script]['jobid'] = ''
+            if os.path.exists(script_flag):
+                job_dic[script]['status'] = 'complete'
+            else:
+                job_dic[script]['status'] = 'incomplete'
+            with open(script, 'w') as f:
+                shell = r'''#!/bin/bash
+echo {self.sample} {chrom} bam bqsr start `date`
+{gatk} BaseRecalibrator --TMP_DIR {tmp_dir} \
+-I {bam_path}/{chrom}.sort.dup.fix.bam -O {bam_path}/{chrom}.bqsr.table -R {reference} \
+{param}
+if [ $? -ne 0 ]; then
+    echo {self.sample} {chrom} bam BaseRecalibrator failed
+    exit 1
+fi
+{gatk} ApplyBQSR --TMP_DIR {tmp_dir} \
+-I {bam_path}/{chrom}.sort.dup.fix.bam -bqsr {bam_path}/{chrom}.bqsr.table -O {bam_path}/{chrom}.bqsr.bam 
+if [ $? -ne 0 ]; then
+    echo {self.sample} {chrom} bam ApplyBQSR failed
+    exit 1
+else
+    {samtools} index {bam_path}/{chrom}.bqsr.bam
+    echo {self.sample} {chrom} bam bqsr end `date`
     touch {script}.check
 fi
 '''.format(**locals())
@@ -279,7 +412,7 @@ def job_submit(job, job_resource, pro):
     if job_num_status != 0:
         logger_main.error('qstat Failed!')
         sys.exit(1)
-    while job_num >= 1900:
+    while job_num >= 1999:
         time.sleep(600)
         job_num_status, job_num = job_num_in_sge()
         if job_num_status != 0:
@@ -363,10 +496,13 @@ if __name__ == '__main__':
     align_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).fq_align()
     sort_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bam_sort()
     merge_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bam_merge()
+    dupmark_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).dupmark()
+    fixmate_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).fixmate()
+    bqsr_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bqsr()
     if onlyshell:
         logger_main.info('WGS Pipeline Create Jobs Finish and Exit!')
         sys.exit(0)
-    nodes = [filter_job_dic, align_job_dic, sort_job_dic, merge_job_dic]
+    nodes = [filter_job_dic, align_job_dic, sort_job_dic, merge_job_dic, dupmark_job_dic, fixmate_job_dic, bqsr_job_dic]
     nodes_dic = reduce(lambda x, y: dict(x, **y), nodes)
     nodes_dic = jobs_map(nodes_dic)
     with open('jobs_map.yaml', 'w') as fp:
