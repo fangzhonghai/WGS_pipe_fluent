@@ -337,14 +337,14 @@ fi
             with open(script, 'w') as f:
                 shell = r'''#!/bin/bash
 echo {self.sample} {chrom} bam bqsr start `date`
-{gatk} BaseRecalibrator --TMP_DIR {tmp_dir} \
+{gatk} BaseRecalibrator --tmp-dir {tmp_dir} \
 -I {bam_path}/{chrom}.sort.dup.fix.bam -O {bam_path}/{chrom}.bqsr.table -R {reference} \
 {param}
 if [ $? -ne 0 ]; then
     echo {self.sample} {chrom} bam BaseRecalibrator failed
     exit 1
 fi
-{gatk} ApplyBQSR --TMP_DIR {tmp_dir} \
+{gatk} ApplyBQSR --tmp-dir {tmp_dir} \
 -I {bam_path}/{chrom}.sort.dup.fix.bam -bqsr {bam_path}/{chrom}.bqsr.table -O {bam_path}/{chrom}.bqsr.bam 
 if [ $? -ne 0 ]; then
     echo {self.sample} {chrom} bam ApplyBQSR failed
