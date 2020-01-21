@@ -26,6 +26,7 @@ resource:
   fixmate: -l vf=15G,p=1 -binding linear:1
   bqsr: -l vf=10G,p=1 -binding linear:1
   bamdst: -l vf=4G,p=1 -binding linear:1
+  HaplotypeCaller: -l vf=4G,p=2 -binding linear:2
 
 parameters:
   fastp: --thread 4 -s 15
@@ -40,7 +41,9 @@ parameters:
    --known-sites /zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/tools/bundle/1000G_phase1.snps.high_confidence.hg19.sites.vcf.gz \
    --known-sites /zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/tools/bundle/dbsnp_138.hg19.vcf.gz \
    --known-sites /zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/tools/bundle/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf
+  HaplotypeCaller: --correct-overlapping-quality true -A BaseQuality -A MappingQuality -A QualByDepth -A MappingQualityRankSumTest -A ReadPosRankSumTest -A FisherStrand -A StrandOddsRatio -A InbreedingCoeff
 
 database:
   hg19: /hwfssz1/ST_MCHRI/CLINIC/SOFTWARES/analysis_pipeline/HPC_chip/db/aln_db/hg19/hg19_chM_male_mask.fa
   genome_bed: "/zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/config/WGS_BED_SPLIT_6M_delN/chr*.part*.bed"
+  genotypeGVCFs_bed: "/zfssz2/BC_RD_P3/BC_RDC1/liufengxia/pipeline/WGS_PIPE_update_cnv/config/WGS_BED_SPLIT_24M_delN/chr*.part*.bed"

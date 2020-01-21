@@ -446,13 +446,74 @@ fi
                 job_dic[script]['status'] = 'incomplete'
             with open(script, 'w') as f:
                 shell = r'''#!/bin/bash
-echo {self.sample} {chrom} {part} bam split qc start `date`
+echo {self.sample} {chrom} {part} bam qc start `date`
 {bamdst} -p {b} -o {bam_split_qc_part_path} {bam_split_part_path}/{chrom}_{part}.bam
+echo {self.sample} {chrom} {part} bam qc end `date`
+touch {script}.check
+'''.format(**locals())
+                f.write(shell)
+        return job_dic
+
+    def haplotypecaller(self):
+        job_dic = {}
+        bam_path = os.path.join(self.path, 'bam_chr')
+        variant_path = os.path.join(self.path, 'variant')
+        variant_script_path = os.path.join(variant_path, 'script')
+        tmp_dir = os.path.join(variant_script_path, 'script/tmp')
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir)
+        gatk = self.config['software']['gatk']
+        resource = self.config['resource']['HaplotypeCaller']
+        param = self.config['parameters']['HaplotypeCaller']
+        beds = glob.glob(self.config['database']['genotypeGVCFs_bed'])
+        reference = self.config['database']['hg19']
+        for b in beds:
+            bed = os.path.basename(b)
+            bed_name_split = bed.split('.')
+            if not bed.startswith('chrM'):
+                chrom = str(bed_name_split[0])
+                part = str(bed_name_split[1])
+            else:
+                chrom = str(bed_name_split[0]) + '.' + str(bed_name_split[1])
+                part = str(bed_name_split[2])
+            variant_part_path = os.path.join(variant_path, chrom + '/' + part)
+            if not os.path.exists(variant_part_path):
+                os.makedirs(variant_part_path)
+            script = os.path.join(variant_script_path, chrom + '.' + part + '.hc.sh')
+            script_flag = script + ".check"
+            job_dic[script] = {}
+            job_dic[script]['flow'] = 'haplotypecaller'
+            job_dic[script]['parent'] = [os.path.join(bam_path, 'script/bqsr/' + chrom + '.bqsr.sh')]
+            job_dic[script]['child'] = []
+            job_dic[script]['resource'] = resource
+            job_dic[script]['jobid'] = ''
+            if os.path.exists(script_flag):
+                job_dic[script]['status'] = 'complete'
+            else:
+                job_dic[script]['status'] = 'incomplete'
+            with open(script, 'w') as f:
+                shell = r'''#!/bin/bash
+echo {self.sample} {chrom} {part} haplotypecaller start `date`
+{gatk} HaplotypeCaller --tmp-dir {tmp_dir} -ERC GVCF \
+-L {b} \
+-R {reference} \
+-I {bam_path}/{chrom}.bqsr.bam \
+-O {variant_part_path}/{chrom}_{part}.gvcf.gz \
+{param}
 if [ $? -ne 0 ]; then
-    echo {self.sample} {chrom} {part} bam split qc failed
+    echo {self.sample} {chrom} {part} haplotypecaller failed
+    exit 1
+fi
+{gatk} GenotypeGVCFs --tmp-dir {tmp_dir} \
+-R {reference} \
+-V {variant_part_path}/{chrom}_{part}.gvcf.gz \
+-L {b} \
+-O {variant_part_path}/{chrom}_{part}.vcf.gz
+if [ $? -ne 0 ]; then
+    echo {self.sample} {chrom} {part} GenotypeGVCFs failed
     exit 1
 else
-    echo {self.sample} {chrom} {part} bam split qc end `date`
+    echo {self.sample} {chrom} {part} GenotypeGVCFs end `date`
     touch {script}.check
 fi
 '''.format(**locals())
@@ -602,15 +663,15 @@ if __name__ == '__main__':
     bqsr_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bqsr()
     split_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bam_part_split()
     qc_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).qc()
-
+    hc_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).haplotypecaller()
     if onlyshell:
         logger_main.info('WGS Pipeline Create Jobs Finish and Exit!')
         sys.exit(0)
     nodes = [filter_job_dic, align_job_dic, sort_job_dic, merge_job_dic, dupmark_job_dic,
-             fixmate_job_dic, bqsr_job_dic, split_job_dic, qc_job_dic]
+             fixmate_job_dic, bqsr_job_dic, split_job_dic, qc_job_dic, hc_job_dic]
     nodes_dic = reduce(lambda x, y: dict(x, **y), nodes)
     nodes_dic = jobs_map(nodes_dic)
-    with open('jobs_map.yaml', 'w') as fp:
+    with open(wkdir + '/jobs_map.yaml', 'w') as fp:
         yaml.dump(nodes_dic, fp, default_flow_style=False)
         logger_main.info('WGS Pipeline Create Jobs & Map Finish!')
     work_flow(nodes_dic, project)
