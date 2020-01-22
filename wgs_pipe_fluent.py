@@ -459,7 +459,7 @@ touch {script}.check
         bam_path = os.path.join(self.path, 'bam_chr')
         variant_path = os.path.join(self.path, 'variant')
         variant_script_path = os.path.join(variant_path, 'script')
-        tmp_dir = os.path.join(variant_script_path, 'script/tmp')
+        tmp_dir = os.path.join(variant_script_path, 'tmp')
         if not os.path.exists(tmp_dir):
             os.makedirs(tmp_dir)
         gatk = self.config['software']['gatk']
@@ -518,6 +518,255 @@ else
 fi
 '''.format(**locals())
                 f.write(shell)
+        return job_dic
+
+    def concat_gvcf(self):
+        job_dic = {}
+        variant_path = os.path.join(self.path, 'variant')
+        variant_script_path = os.path.join(variant_path, 'script')
+        bcftools = self.config['software']['bcftools']
+        resource = self.config['resource']['bcftools']
+        param = self.config['parameters']['bcftools_concat']
+        tabix = self.config['software']['tabix']
+        beds = glob.glob(self.config['database']['genotypeGVCFs_bed'])
+        variant_hc_scripts = []
+        gvcfs = []
+        vcfs = []
+        for b in beds:
+            bed = os.path.basename(b)
+            bed_name_split = bed.split('.')
+            if not bed.startswith('chrM'):
+                chrom = str(bed_name_split[0])
+                part = str(bed_name_split[1])
+            else:
+                chrom = str(bed_name_split[0]) + '.' + str(bed_name_split[1])
+                part = str(bed_name_split[2])
+            variant_part_path = os.path.join(variant_path, chrom + '/' + part)
+            variant_hc_scripts.append(os.path.join(variant_script_path, chrom + '.' + part + '.hc.sh'))
+            gvcfs.append(os.path.join(variant_part_path, chrom + '_' + part + '.gvcf.gz'))
+            vcfs.append(os.path.join(variant_part_path, chrom + '_' + part + '.vcf.gz'))
+        gvcfs_file = pd.DataFrame({'gvcf': gvcfs}).to_csv(variant_path + '/part_gvcf.list', sep='\t', index=False, header=None)
+        vcfs_file = pd.DataFrame({'vcf': vcfs}).to_csv(variant_path + '/part_vcf.list', sep='\t', index=False, header=None)
+        script = os.path.join(variant_script_path, 'concat.part_vcf.' + self.sample + '.sh')
+        script_flag = script + ".check"
+        job_dic[script] = {}
+        job_dic[script]['flow'] = 'concat_vcfs'
+        job_dic[script]['parent'] = variant_hc_scripts
+        job_dic[script]['child'] = []
+        job_dic[script]['resource'] = resource
+        job_dic[script]['jobid'] = ''
+        if os.path.exists(script_flag):
+            job_dic[script]['status'] = 'complete'
+        else:
+            job_dic[script]['status'] = 'incomplete'
+        with open(script, 'w') as f:
+            shell = r'''#!/bin/bash
+echo {self.sample} concat vcf start `date`
+{bcftools} {param} -o {variant_path}/{self.sample}.wgs.vcf.gz -f {variant_path}/part_vcf.list
+if [ $? -ne 0 ]; then
+    echo {self.sample} concat vcf failed
+    exit 1
+fi
+{tabix} -p vcf {variant_path}/{self.sample}.wgs.vcf.gz
+if [ $? -ne 0 ]; then
+    echo {self.sample} tabix vcf failed
+    exit 1
+fi
+{bcftools} {param} -o {variant_path}/{self.sample}.wgs.gvcf.gz -f {variant_path}/part_gvcf.list
+if [ $? -ne 0 ]; then
+    echo {self.sample} concat gvcf failed
+    exit 1
+fi
+{tabix} -p vcf {variant_path}/{self.sample}.wgs.gvcf.gz
+if [ $? -ne 0 ]; then
+    echo {self.sample} tabix gvcf failed
+    exit 1
+fi
+echo {self.sample} concat vcf end `date`
+touch {script}.check
+'''.format(**locals())
+            f.write(shell)
+        return job_dic
+
+    def vqsr_snp(self):
+        job_dic = {}
+        variant_path = os.path.join(self.path, 'variant')
+        variant_script_path = os.path.join(variant_path, 'script')
+        tmp_dir = os.path.join(variant_path, 'script/snp_tmp')
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir)
+        gatk = self.config['software']['gatk']
+        resource = self.config['resource']['vqsr']
+        param = self.config['parameters']['vqsr_snp']
+        reference = self.config['database']['hg19']
+        script = os.path.join(variant_script_path, 'vqsr.snp.' + self.sample + '.sh')
+        script_flag = script + ".check"
+        job_dic[script] = {}
+        job_dic[script]['flow'] = 'vqsr_snp'
+        job_dic[script]['parent'] = [os.path.join(variant_script_path, 'concat.part_vcf.' + self.sample + '.sh')]
+        job_dic[script]['child'] = []
+        job_dic[script]['resource'] = resource
+        job_dic[script]['jobid'] = ''
+        if os.path.exists(script_flag):
+            job_dic[script]['status'] = 'complete'
+        else:
+            job_dic[script]['status'] = 'incomplete'
+        with open(script, 'w') as f:
+            shell = r'''#!/bin/bash
+echo {self.sample} vqsr snp start `date`
+{gatk} SelectVariants -select-type SNP --tmp-dir {tmp_dir} \
+-R {reference} \
+--variant {variant_path}/{self.sample}.wgs.vcf.gz \
+-O {variant_path}/{self.sample}.wgs.snp.vcf
+if [ $? -ne 0 ]; then
+    echo {self.sample} select snp failed
+    exit 1
+fi
+{gatk} VariantRecalibrator -mode SNP --max-gaussians 4 \
+--tmp-dir {tmp_dir} \
+-R {reference} \
+-V {variant_path}/{self.sample}.wgs.snp.vcf \
+-O {variant_path}/{self.sample}.wgs.snp_recal.vcf \
+--tranches-file {variant_path}/{self.sample}.wgs.snp_tranches.vcf \
+{param}
+if [ $? -ne 0 ]; then
+    echo {self.sample} snp VariantRecalibrator failed
+    exit 1
+fi
+{gatk} ApplyVQSR --tmp-dir {tmp_dir} \
+-R {reference} \
+-V {variant_path}/{self.sample}.wgs.snp.vcf \
+-O {variant_path}/{self.sample}.wgs.snp.filter.vcf \
+--truth-sensitivity-filter-level 99.0 -mode SNP \
+--tranches-file {variant_path}/{self.sample}.wgs.snp_tranches.vcf \
+--recal-file {variant_path}/{self.sample}.wgs.snp_recal.vcf
+if [ $? -ne 0 ]; then
+    echo {self.sample} snp ApplyVQSR failed
+    exit 1
+fi
+{gatk} SortVcf --TMP_DIR {tmp_dir} \
+-I {variant_path}/{self.sample}.wgs.snp.filter.vcf \
+-O {variant_path}/{self.sample}.wgs.snp.filter.sort.vcf
+if [ $? -ne 0 ]; then
+    echo {self.sample} snp sort vcf failed
+    exit 1
+fi
+echo {self.sample} vqsr snp end `date`
+touch {script}.check
+'''.format(**locals())
+            f.write(shell)
+        return job_dic
+
+    def vqsr_indel(self):
+        job_dic = {}
+        variant_path = os.path.join(self.path, 'variant')
+        variant_script_path = os.path.join(variant_path, 'script')
+        tmp_dir = os.path.join(variant_path, 'script/indel_tmp')
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir)
+        gatk = self.config['software']['gatk']
+        resource = self.config['resource']['vqsr']
+        param = self.config['parameters']['vqsr_indel']
+        reference = self.config['database']['hg19']
+        script = os.path.join(variant_script_path, 'vqsr.indel.' + self.sample + '.sh')
+        script_flag = script + ".check"
+        job_dic[script] = {}
+        job_dic[script]['flow'] = 'vqsr_indel'
+        job_dic[script]['parent'] = [os.path.join(variant_script_path, 'concat.part_vcf.' + self.sample + '.sh')]
+        job_dic[script]['child'] = []
+        job_dic[script]['resource'] = resource
+        job_dic[script]['jobid'] = ''
+        if os.path.exists(script_flag):
+            job_dic[script]['status'] = 'complete'
+        else:
+            job_dic[script]['status'] = 'incomplete'
+        with open(script, 'w') as f:
+            shell = r'''#!/bin/bash
+echo {self.sample} vqsr indel start `date`
+{gatk} SelectVariants -select-type INDEL --tmp-dir {tmp_dir} \
+-R {reference} \
+--variant {variant_path}/{self.sample}.wgs.vcf.gz \
+-O {variant_path}/{self.sample}.wgs.indel.vcf
+if [ $? -ne 0 ]; then
+    echo {self.sample} select indel failed
+    exit 1
+fi
+{gatk} VariantRecalibrator -mode INDEL --max-gaussians 4 \
+--tmp-dir {tmp_dir} \
+-R {reference} \
+-V {variant_path}/{self.sample}.wgs.indel.vcf \
+-O {variant_path}/{self.sample}.wgs.indel_recal.vcf \
+--tranches-file {variant_path}/{self.sample}.wgs.indel_tranches.vcf \
+{param}
+if [ $? -ne 0 ]; then
+    echo {self.sample} indel VariantRecalibrator failed
+    exit 1
+fi
+{gatk} ApplyVQSR --tmp-dir {tmp_dir} \
+-R {reference} \
+-V {variant_path}/{self.sample}.wgs.indel.vcf \
+-O {variant_path}/{self.sample}.wgs.indel.filter.vcf \
+--truth-sensitivity-filter-level 99.0 -mode INDEL \
+--tranches-file {variant_path}/{self.sample}.wgs.indel_tranches.vcf \
+--recal-file {variant_path}/{self.sample}.wgs.indel_recal.vcf
+if [ $? -ne 0 ]; then
+    echo {self.sample} indel ApplyVQSR failed
+    exit 1
+fi
+{gatk} SortVcf --TMP_DIR {tmp_dir} \
+-I {variant_path}/{self.sample}.wgs.indel.filter.vcf \
+-O {variant_path}/{self.sample}.wgs.indel.filter.sort.vcf
+if [ $? -ne 0 ]; then
+    echo {self.sample} indel sort vcf failed
+    exit 1
+fi
+echo {self.sample} vqsr indel end `date`
+touch {script}.check
+'''.format(**locals())
+            f.write(shell)
+        return job_dic
+
+    def merge_vqsr(self):
+        job_dic = {}
+        variant_path = os.path.join(self.path, 'variant')
+        variant_script_path = os.path.join(variant_path, 'script')
+        tmp_dir = os.path.join(variant_script_path, 'tmp')
+        gatk = self.config['software']['gatk']
+        resource = self.config['resource']['merge_vcf']
+        tabix = self.config['software']['tabix']
+        script = os.path.join(variant_script_path, 'vqsr.merge.' + self.sample + '.sh')
+        script_flag = script + ".check"
+        job_dic[script] = {}
+        job_dic[script]['flow'] = 'merge_vqsr'
+        job_dic[script]['parent'] = [os.path.join(variant_script_path, 'vqsr.snp.' + self.sample + '.sh'),
+                                     os.path.join(variant_script_path, 'vqsr.indel.' + self.sample + '.sh')]
+        job_dic[script]['child'] = []
+        job_dic[script]['resource'] = resource
+        job_dic[script]['jobid'] = ''
+        if os.path.exists(script_flag):
+            job_dic[script]['status'] = 'complete'
+        else:
+            job_dic[script]['status'] = 'incomplete'
+        with open(script, 'w') as f:
+            shell = r'''#!/bin/bash
+echo {self.sample} merge vqsr vcf start `date`
+{gatk} MergeVcfs --TMP_DIR {tmp_dir}
+-I {variant_path}/{self.sample}.wgs.snp.filter.sort.vcf \
+-I {variant_path}/{self.sample}.wgs.indel.filter.sort.vcf \
+-O {variant_path}/{self.sample}.wgs.filter.vcf.gz
+if [ $? -ne 0 ]; then
+    echo {self.sample} merge vqsr vcf failed
+    exit 1
+fi
+{tabix} -p vcf {variant_path}/{self.sample}.wgs.filter.vcf.gz
+if [ $? -ne 0 ]; then
+    echo {self.sample} tabix vcf failed
+    exit 1
+fi
+echo {self.sample} merge vqsr vcf end `date`
+touch {script}.check
+'''.format(**locals())
+            f.write(shell)
         return job_dic
 
 
@@ -664,11 +913,15 @@ if __name__ == '__main__':
     split_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bam_part_split()
     qc_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).qc()
     hc_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).haplotypecaller()
+    concat_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).concat_gvcf()
+    vqsrsnp_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).vqsr_snp()
+    vqsrindel_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).vqsr_indel()
+    vqsrmerge_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).merge_vqsr()
     if onlyshell:
         logger_main.info('WGS Pipeline Create Jobs Finish and Exit!')
         sys.exit(0)
-    nodes = [filter_job_dic, align_job_dic, sort_job_dic, merge_job_dic, dupmark_job_dic,
-             fixmate_job_dic, bqsr_job_dic, split_job_dic, qc_job_dic, hc_job_dic]
+    nodes = [filter_job_dic, align_job_dic, sort_job_dic, merge_job_dic, dupmark_job_dic, fixmate_job_dic, bqsr_job_dic, split_job_dic,
+             qc_job_dic, hc_job_dic, concat_job_dic, vqsrsnp_job_dic, vqsrindel_job_dic, vqsrmerge_job_dic]
     nodes_dic = reduce(lambda x, y: dict(x, **y), nodes)
     nodes_dic = jobs_map(nodes_dic)
     with open(wkdir + '/jobs_map.yaml', 'w') as fp:
