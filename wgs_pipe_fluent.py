@@ -12,7 +12,7 @@ import os
 import re
 
 
-class JobCreate:
+class CreateJob:
     def __init__(self, config, path, sample, gender, fq_info_df):
         self.config = config
         self.path = path
@@ -770,29 +770,60 @@ touch {script}.check
         return job_dic
 
 
+class RunJob:
+    def __init__(self, job, job_dic, pro):
+        self.job = job
+        self.job_dic = job_dic
+        self.pro = pro
+
+    @property
+    def parent_status(self):
+        if len(self.job_dic['parent']) == 0:
+            return 'finished'
+        status_list = [parent['status'] for parent in self.job_dic['parent']]
+        if 'incomplete' not in status_list:
+            return 'finished'
+        else:
+            return 'unfinished'
+
+    @property
+    def status_in_sge(self):
+        command = "qstat | grep " + "\"" + self.job_dic['jobid'] + " " + "\""
+        status, output = subprocess.getstatusoutput(command)
+        return status, output
+
+    @staticmethod
+    def job_num_in_sge():
+        command = "qstat | grep `whoami` |wc -l"
+        status, output = subprocess.getstatusoutput(command)
+        return status, int(output)
+
+    @staticmethod
+    def job_id_in_sge(command):
+        status, output = subprocess.getstatusoutput(command)
+        jobid = re.findall(r"Your job (\d+) ", output)[0]
+        return status, jobid
+
+    @property
+    def submit(self):
+        job_num_status, job_num = RunJob.job_num_in_sge()
+        if job_num_status != 0:
+            sys.exit(1)
+        while job_num >= 1999:
+            time.sleep(600)
+            job_num_status, job_num = RunJob.job_num_in_sge()
+            if job_num_status != 0:
+                sys.exit(1)
+        job_path = os.path.dirname(self.job)
+        command = "qsub -wd " + job_path + " -P " + self.pro + " " + self.job_dic['resource'] + " " + self.job
+        status, jobid = RunJob.job_id_in_sge(command)
+        return status, jobid
+
+
 def yaml_read(yaml_file):
     with open(yaml_file, 'r') as y:
         yaml_dic = yaml.load(y, Loader=yaml.FullLoader)
     return yaml_dic
-
-
-def job_id_in_sge(command):
-    command_status, command_output = subprocess.getstatusoutput(command)
-    command_jobid = re.findall(r"Your job (\d+) ", command_output)[0]
-    return command_status, command_jobid
-
-
-def job_num_in_sge():
-    command = "qstat | grep `whoami` |wc -l"
-    command_status, command_output = subprocess.getstatusoutput(command)
-    return command_status, int(command_output)
-
-
-def job_status_in_sge(jobid):
-    # command = "qstat | grep " + "\"" + jobid + " " + "\"" + " | cut -f5 -d \" \""
-    command = "qstat | grep " + "\"" + jobid + " " + "\""
-    command_status, command_output = subprocess.getstatusoutput(command)
-    return command_status, command_output
 
 
 def get_sample_info(fq_ls):
@@ -818,23 +849,6 @@ def jobs_map(jobs_dic) -> dict:
     return jobs_dic
 
 
-def job_submit(job, job_resource, pro):
-    job_num_status, job_num = job_num_in_sge()
-    if job_num_status != 0:
-        logger_main.error('qstat Failed!')
-        sys.exit(1)
-    while job_num >= 1999:
-        time.sleep(600)
-        job_num_status, job_num = job_num_in_sge()
-        if job_num_status != 0:
-            logger_main.error('qstat Failed!')
-            sys.exit(1)
-    job_path = os.path.dirname(job)
-    command = "qsub -wd " + job_path + " -P " + pro + " " + job_resource + " " + job
-    command_status, command_jobid = job_id_in_sge(command)
-    return command_status, command_jobid
-
-
 def work_flow(jobs_dic, pro):
     # jobs_status = ['r', 'hr', 'qw', 'Eqw', 'hqw', 't', 's']
     queue = list(filter(lambda x: jobs_dic[x]['flow'] == 'filter', jobs_dic.keys()))
@@ -846,24 +860,15 @@ def work_flow(jobs_dic, pro):
                 jobs_dic[q]['status'] = 'complete'
             if jobs_dic[q]['status'] == 'incomplete':
                 if jobs_dic[q]['jobid'] == '':
-                    if len(jobs_dic[q]['parent']) == 0:
-                        command_status, command_jobid = job_submit(q, jobs_dic[q]['resource'], pro)
+                    if RunJob(q, jobs_dic[q], pro).parent_status == 'finished':
+                        command_status, command_jobid = RunJob(q, jobs_dic[q], pro).submit
                         if command_status != 0:
                             logger_main.error(q + ' Submit Failed!')
                             sys.exit(1)
                         jobs_dic[q]['jobid'] = command_jobid
                         logger_main.info(q + ' Submit Success!')
-                    else:
-                        status_list = [jobs_dic[p]['status'] for p in jobs_dic[q]['parent']]
-                        if 'incomplete' not in status_list:
-                            command_status, command_jobid = job_submit(q, jobs_dic[q]['resource'], pro)
-                            if command_status != 0:
-                                logger_main.error(q + ' Submit Failed!')
-                                sys.exit(1)
-                            jobs_dic[q]['jobid'] = command_jobid
-                            logger_main.info(q + ' Submit Success!')
                 else:
-                    command_status, command_output = job_status_in_sge(jobs_dic[q]['jobid'])
+                    command_status, command_output = RunJob(q, jobs_dic[q], pro).status_in_sge
                     if command_status != 0 and command_output == '' and not os.path.exists(q + '.check'):
                         logger_main.error(q + ' Run Failed!')
                         sys.exit(1)
@@ -903,20 +908,20 @@ if __name__ == '__main__':
     logger_main.addHandler(fh)
     fh.setFormatter(fm)
     logger_main.info('WGS Pipeline Create Jobs Start!')
-    filter_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).fq_filter()
-    align_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).fq_align()
-    sort_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bam_sort()
-    merge_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bam_merge()
-    dupmark_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).dupmark()
-    fixmate_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).fixmate()
-    bqsr_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bqsr()
-    split_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).bam_part_split()
-    qc_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).qc()
-    hc_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).haplotypecaller()
-    concat_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).concat_gvcf()
-    vqsrsnp_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).vqsr_snp()
-    vqsrindel_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).vqsr_indel()
-    vqsrmerge_job_dic = JobCreate(config_dic, wkdir, specimen, sex, fq_info).merge_vqsr()
+    filter_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).fq_filter()
+    align_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).fq_align()
+    sort_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).bam_sort()
+    merge_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).bam_merge()
+    dupmark_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).dupmark()
+    fixmate_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).fixmate()
+    bqsr_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).bqsr()
+    split_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).bam_part_split()
+    qc_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).qc()
+    hc_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).haplotypecaller()
+    concat_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).concat_gvcf()
+    vqsrsnp_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).vqsr_snp()
+    vqsrindel_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).vqsr_indel()
+    vqsrmerge_job_dic = CreateJob(config_dic, wkdir, specimen, sex, fq_info).merge_vqsr()
     if onlyshell:
         logger_main.info('WGS Pipeline Create Jobs Finish and Exit!')
         sys.exit(0)
